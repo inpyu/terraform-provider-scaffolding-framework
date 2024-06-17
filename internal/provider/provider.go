@@ -45,7 +45,7 @@ type hashicupsProvider struct {
 
 // Metadata returns the provider type name.
 func (p *hashicupsProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "hashicups"
+	resp.TypeName = "inpyu"
 	resp.Version = p.version
 }
 
@@ -205,5 +205,6 @@ func (p *hashicupsProvider) DataSources(_ context.Context) []func() datasource.D
 func (p *hashicupsProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewOrderResource,
+		NewCafeResource,
 	}
 }

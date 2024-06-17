@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -21,29 +22,22 @@ func NewCafeResource() resource.Resource {
 	return &cafeResource{}
 }
 
-type cafeDataSourceModel struct {
-	Cafe []cafeResourceModel `tfsdk:"cafe"`
-}
-
-// orderResource is the resource implementation.
 type cafeResource struct {
 	client *hashicups.Client
 }
 
 type cafeResourceModel struct {
-	ID          types.Int64  `tfsdk:"id"`
+	ID          types.String `tfsdk:"id"`
 	Name        types.String `tfsdk:"name"`
 	Address     types.String `tfsdk:"address"`
 	Description types.String `tfsdk:"description"`
 	Image       types.String `tfsdk:"image"`
 }
 
-// Metadata returns the resource type name.
 func (r *cafeResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
 	resp.TypeName = req.ProviderTypeName + "_cafe"
 }
 
-// Schema defines the schema for the resource.
 func (r *cafeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
@@ -54,34 +48,37 @@ func (r *cafeResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				},
 			},
 			"name": schema.StringAttribute{
-				Computed: true,
+				Optional: true,
 			},
 			"address": schema.StringAttribute{
-				Computed: true,
+				Optional: true,
 			},
 			"description": schema.StringAttribute{
-				Computed: true,
+				Optional: true,
 			},
 			"image": schema.StringAttribute{
-				Computed: true,
+				Optional: true,
 			},
 		},
 	}
 }
 
-// Create a new resource.
 func (r *cafeResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
-	// Retrieve values from plan
 	var plan cafeResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	var items []hashicups.Cafe
 
-	// Create new cafe
-	cafe, err := r.client.CreateCafe(items)
+	cafe := hashicups.Cafe{
+		Name:        plan.Name.ValueString(),
+		Address:     plan.Address.ValueString(),
+		Description: plan.Description.ValueString(),
+		Image:       plan.Image.ValueString(),
+	}
+
+	createdCafe, err := r.client.CreateCafe([]hashicups.Cafe{cafe})
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error creating cafe",
@@ -90,13 +87,12 @@ func (r *cafeResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	plan.ID = types.Int64Value(int64(cafe.ID))
-	plan.Name = types.StringValue(cafe.Name)
-	plan.Address = types.StringValue(cafe.Address)
-	plan.Description = types.StringValue(cafe.Description)
-	plan.Image = types.StringValue(cafe.Image)
+	plan.ID = types.StringValue(strconv.Itoa(createdCafe.ID))
+	plan.Name = types.StringValue(createdCafe.Name)
+	plan.Address = types.StringValue(createdCafe.Address)
+	plan.Description = types.StringValue(createdCafe.Description)
+	plan.Image = types.StringValue(createdCafe.Image)
 
-	// Set state to fully populated data
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -104,33 +100,52 @@ func (r *cafeResource) Create(ctx context.Context, req resource.CreateRequest, r
 	}
 }
 
-// Read resource information.
-func (d *cafeResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
-	var state cafeDataSourceModel
+func (r *cafeResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+	var state cafeResourceModel
+	diags := req.State.Get(ctx, &state)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
-	cafes, err := d.client.GetCafes()
+	cafeID, err := strconv.Atoi(state.ID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError(
-			"Unable to Read HashiCups Cafes",
+			"Error Converting Cafe ID",
+			"Could not convert cafe ID to integer: "+err.Error(),
+		)
+		return
+	}
+
+	// Assume GetCafe now returns a list of cafes
+	cafes, err := r.client.GetCafe(strconv.Itoa(cafeID))
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Unable to Read HashiCups Cafe",
 			err.Error(),
 		)
 		return
 	}
 
-	// Map response body to model
-	for _, cafe := range cafes {
-		cafeState := cafeResourceModel{
-			ID:          types.Int64Value(int64(cafe.ID)),
-			Name:        types.StringValue(cafe.Name),
-			Address:     types.StringValue(cafe.Address),
-			Description: types.StringValue(cafe.Description),
-			Image:       types.StringValue(cafe.Image),
-		}
-		state.Cafe = append(state.Cafe, cafeState)
+	if len(cafes) == 0 {
+		resp.Diagnostics.AddError(
+			"Cafe Not Found",
+			"No cafe found with the given ID",
+		)
+		return
 	}
 
+	cafe := cafes[0]
+
+	// Map response body to model
+	state.ID = types.StringValue(strconv.Itoa(cafe.ID))
+	state.Address = types.StringValue(cafe.Address)
+	state.Image = types.StringValue(cafe.Image)
+	state.Name = types.StringValue(cafe.Name)
+	state.Description = types.StringValue(cafe.Description)
+
 	// Set state
-	diags := resp.State.Set(ctx, &state)
+	diags = resp.State.Set(ctx, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -138,7 +153,6 @@ func (d *cafeResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 }
 
 func (r *cafeResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
-	// Retrieve values from plan
 	var plan cafeResourceModel
 	diags := req.Plan.Get(ctx, &plan)
 	resp.Diagnostics.Append(diags...)
@@ -146,11 +160,27 @@ func (r *cafeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	// Generate API request body from plan
-	var hashicupsItems []hashicups.Cafe
+	// Convert the ID from string to int
+	cafeID, err := strconv.Atoi(plan.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Converting Cafe ID",
+			"Could not convert cafe ID to integer: "+err.Error(),
+		)
+		return
+	}
 
-	// Update existing order
-	_, err := r.client.UpdateCafe(plan.ID.String(), hashicupsItems)
+	// Create a cafe object
+	cafe := hashicups.Cafe{
+		ID:          cafeID, // ID is an int
+		Name:        plan.Name.ValueString(),
+		Address:     plan.Address.ValueString(),
+		Description: plan.Description.ValueString(),
+		Image:       plan.Image.ValueString(),
+	}
+
+	// Update the existing cafe
+	updatedCafe, err := r.client.UpdateCafe(plan.ID.ValueString(), []hashicups.Cafe{cafe})
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Updating HashiCups Cafe",
@@ -159,22 +189,12 @@ func (r *cafeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	// Fetch updated items from GetOrder as UpdateOrder items are not
-	// populated.
-	cafe, err := r.client.GetCafe(plan.ID.String())
-	if err != nil {
-		resp.Diagnostics.AddError(
-			"Error Reading HashiCups Cafe",
-			"Could not read HashiCups ocaferder ID "+plan.ID.String()+": "+err.Error(),
-		)
-		return
-	}
-
-	// Update resource state with updated items and timestamp
-	plan.Name = types.StringValue(cafe.Name)
-	plan.Address = types.StringValue(cafe.Address)
-	plan.Description = types.StringValue(cafe.Description)
-	plan.Image = types.StringValue(cafe.Image)
+	// Update resource state with updated items
+	plan.ID = types.StringValue(strconv.Itoa(updatedCafe.ID))
+	plan.Name = types.StringValue(updatedCafe.Name)
+	plan.Address = types.StringValue(updatedCafe.Address)
+	plan.Description = types.StringValue(updatedCafe.Description)
+	plan.Image = types.StringValue(updatedCafe.Image)
 
 	diags = resp.State.Set(ctx, plan)
 	resp.Diagnostics.Append(diags...)
@@ -184,7 +204,6 @@ func (r *cafeResource) Update(ctx context.Context, req resource.UpdateRequest, r
 }
 
 func (r *cafeResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
-	// Retrieve values from state
 	var state cafeResourceModel
 	diags := req.State.Get(ctx, &state)
 	resp.Diagnostics.Append(diags...)
@@ -192,8 +211,16 @@ func (r *cafeResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 		return
 	}
 
-	// Delete existing cafe
-	err := r.client.DeleteCafe(state.ID.String())
+	cafeID, err := strconv.Atoi(state.ID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			"Error Deleting HashiCups Cafe",
+			"Could not convert cafe ID to integer: "+err.Error(),
+		)
+		return
+	}
+
+	err = r.client.DeleteCafe(strconv.Itoa(cafeID))
 	if err != nil {
 		resp.Diagnostics.AddError(
 			"Error Deleting HashiCups Cafe",
@@ -203,7 +230,6 @@ func (r *cafeResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	}
 }
 
-// Configure adds the provider configured client to the resource.
 func (r *cafeResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
